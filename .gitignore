@@ -5,3 +5,8 @@ node_modules/
 storage/*
 !storage/.gitkeep
 .DS_Store
+
+# Backups locais
+*.bak
+*.bak-*
+*.bak-*
