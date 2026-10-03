@@ -345,4 +345,157 @@ router.get('/:codigo/pdf', async (req, res) => {
   }
 });
 
+
+/* ============================================================
+   POST /api/bilhetes/:codigo/validar — marcar como usado (admin)
+   Retorna:
+     - resultado: 'verde' | 'vermelho'
+     - motivo: texto quando vermelho
+     - bilhete: dados (quando verde)
+   ============================================================ */
+router.post('/:codigo/validar', requireAuth, async (req, res) => {
+  const adminId = req.admin?.id;
+  const codigo = String(req.params.codigo || '').trim().toUpperCase();
+
+  try {
+    // Busca bilhete com dados do evento
+    const { rows } = await query(
+      `SELECT b.*, e.nome AS evento_nome, e.slug AS evento_slug,
+              e.data_evento, e.local
+       FROM bilhetes b
+       JOIN eventos e ON e.id = b.evento_id
+       WHERE b.codigo = $1`,
+      [codigo]
+    );
+
+    if (!rows.length) {
+      // Regista tentativa inválida
+      await query(
+        `INSERT INTO validacoes (bilhete_id, admin_id, resultado, notas)
+         VALUES (NULL, $1, 'invalido', 'Código não encontrado: ' || $2)`,
+        [adminId, codigo]
+      );
+      return res.json({
+        ok: true,
+        resultado: 'vermelho',
+        motivo: 'Bilhete não encontrado',
+        codigo
+      });
+    }
+
+    const b = rows[0];
+
+    // Já usado?
+    if (b.usado_em) {
+      await query(
+        `INSERT INTO validacoes (bilhete_id, admin_id, resultado, notas)
+         VALUES ($1, $2, 'repetido', 'Tentativa de reutilização')`,
+        [b.id, adminId]
+      );
+      return res.json({
+        ok: true,
+        resultado: 'vermelho',
+        motivo: 'Bilhete já foi usado em ' + new Date(b.usado_em).toLocaleString('pt-PT'),
+        bilhete: {
+          id: b.id,
+          codigo: b.codigo,
+          tipo: b.tipo,
+          comprador_nome: b.comprador_nome,
+          evento_nome: b.evento_nome,
+          usado_em: b.usado_em
+        }
+      });
+    }
+
+    // Cancelado?
+    if (b.estado === 'cancelado') {
+      await query(
+        `INSERT INTO validacoes (bilhete_id, admin_id, resultado, notas)
+         VALUES ($1, $2, 'cancelado', 'Bilhete cancelado')`,
+        [b.id, adminId]
+      );
+      return res.json({
+        ok: true,
+        resultado: 'vermelho',
+        motivo: 'Bilhete cancelado',
+        bilhete: { id: b.id, codigo: b.codigo, tipo: b.tipo, comprador_nome: b.comprador_nome, evento_nome: b.evento_nome }
+      });
+    }
+
+    // Ainda pendente (não pago)?
+    if (b.estado === 'pendente') {
+      await query(
+        `INSERT INTO validacoes (bilhete_id, admin_id, resultado, notas)
+         VALUES ($1, $2, 'pendente', 'Pagamento ainda não confirmado')`,
+        [b.id, adminId]
+      );
+      return res.json({
+        ok: true,
+        resultado: 'vermelho',
+        motivo: 'Pagamento ainda não confirmado',
+        bilhete: { id: b.id, codigo: b.codigo, tipo: b.tipo, comprador_nome: b.comprador_nome, evento_nome: b.evento_nome }
+      });
+    }
+
+    // Está tudo bem — marca como usado
+    const update = await query(
+      `UPDATE bilhetes
+       SET usado_em = NOW(), usado_por_admin_id = $1
+       WHERE id = $2
+       RETURNING *`,
+      [adminId, b.id]
+    );
+
+    await query(
+      `INSERT INTO validacoes (bilhete_id, admin_id, resultado, notas)
+       VALUES ($1, $2, 'valido', 'Entrada autorizada')`,
+      [b.id, adminId]
+    );
+
+    res.json({
+      ok: true,
+      resultado: 'verde',
+      motivo: 'Entrada autorizada',
+      bilhete: {
+        id: update.rows[0].id,
+        codigo: update.rows[0].codigo,
+        tipo: update.rows[0].tipo,
+        preco: update.rows[0].preco,
+        comprador_nome: update.rows[0].comprador_nome,
+        comprador_telefone: update.rows[0].comprador_telefone,
+        evento_nome: b.evento_nome,
+        evento_slug: b.evento_slug,
+        data_evento: b.data_evento,
+        local: b.local,
+        usado_em: update.rows[0].usado_em
+      }
+    });
+  } catch (e) {
+    console.error('[bilhetes/validar]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   GET /api/bilhetes/:id/validacoes — histórico (admin)
+   ============================================================ */
+router.get('/:id/validacoes', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { rows } = await query(
+      `SELECT v.*, a.username AS admin_username
+       FROM validacoes v
+       LEFT JOIN admins a ON a.id = v.admin_id
+       WHERE v.bilhete_id = $1
+       ORDER BY v.criado_em DESC`,
+      [id]
+    );
+    res.json({ ok: true, total: rows.length, validacoes: rows });
+  } catch (e) {
+    console.error('[bilhetes/validacoes]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+
 export default router;
