@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "migrate": "node --env-file=.env migrate.js",
+    "create-admin": "node --env-file=.env scripts/create-admin.js"
   },
   "type": "module",
   "dependencies": {

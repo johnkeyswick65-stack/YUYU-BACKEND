@@ -4,6 +4,7 @@ import 'dotenv/config';
 import authRoutes from './src/routes/auth.js';
 import eventosRoutes from './src/routes/eventos.js';
 import bilhetesRoutes from './src/routes/bilhetes.js';
+import bilhetesRoutes from './src/routes/bilhetes.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,7 +20,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: 'YUYU EVENTOS API',
-    version: '0.4.0',
+    version: '0.3.0',
     env: process.env.NODE_ENV,
     timestamp: new Date().toISOString()
   });
@@ -27,6 +28,7 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/eventos', eventosRoutes);
+app.use('/api/bilhetes', bilhetesRoutes);
 app.use('/api/bilhetes', bilhetesRoutes);
 
 app.get('/', (req, res) => {
@@ -43,9 +45,8 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n✓ YUYU API v0.4.0 em http://localhost:${PORT}`);
-  console.log(`  Health:   GET  /api/health`);
-  console.log(`  Login:    POST /api/auth/login`);
-  console.log(`  Eventos:  GET  /api/eventos`);
-  console.log(`  Bilhetes: GET  /api/bilhetes\n`);
+  console.log(`\n✓ YUYU API v0.3.0 em http://localhost:${PORT}`);
+  console.log(`  Health:  GET  /api/health`);
+  console.log(`  Login:   POST /api/auth/login`);
+  console.log(`  Eventos: GET  /api/eventos\n`);
 });
