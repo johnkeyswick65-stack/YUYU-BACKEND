@@ -7,10 +7,24 @@ import { gerarSlug } from '../utils/slug.js';
 
 const router = express.Router();
 
+/* Cache em memória para a lista pública de eventos */
+let listaCache = null;
+let listaTs = 0;
+const LISTA_TTL = 60000; // 60s
+function invalidarCache() { listaCache = null; listaTs = 0; }
+
 /* GET /api/eventos — lista pública (só ativos) */
 router.get('/', async (req, res) => {
   try {
     const { categoria, busca } = req.query;
+    const semFiltros = !categoria && !busca;
+
+    // Só serve cache quando não há filtros (chamada mais comum)
+    if (semFiltros && listaCache && (Date.now() - listaTs) < LISTA_TTL) {
+      res.set('X-Cache', 'HIT');
+      return res.json({ ok: true, eventos: listaCache, cached: true });
+    }
+
     const params = [];
     const where = ['ativo = true'];
 
@@ -33,6 +47,12 @@ router.get('/', async (req, res) => {
       params
     );
 
+    if (semFiltros) {
+      listaCache = rows;
+      listaTs = Date.now();
+    }
+
+    res.set('X-Cache', 'MISS');
     res.json({ ok: true, eventos: rows });
   } catch (e) {
     console.error('[eventos/list]', e);
@@ -124,6 +144,7 @@ router.post('/', requireAuth, upload.single('poster'), async (req, res) => {
       ]
     );
 
+    invalidarCache();
     res.status(201).json({ ok: true, evento: rows[0] });
   } catch (e) {
     console.error('[eventos/create]', e);
@@ -189,6 +210,7 @@ router.put('/:id', requireAuth, upload.single('poster'), async (req, res) => {
       ]
     );
 
+    invalidarCache();
     res.json({ ok: true, evento: rows[0] });
   } catch (e) {
     console.error('[eventos/update]', e);
@@ -210,6 +232,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     }
 
     await query('DELETE FROM eventos WHERE id = $1', [id]);
+    invalidarCache();
     res.json({ ok: true, message: 'Evento apagado' });
   } catch (e) {
     console.error('[eventos/delete]', e);
