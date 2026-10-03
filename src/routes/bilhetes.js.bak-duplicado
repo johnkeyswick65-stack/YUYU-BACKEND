@@ -345,4 +345,33 @@ router.get('/:codigo/pdf', async (req, res) => {
   }
 });
 
+
+
+router.get('/:codigo/pdf', async (req, res) => {
+  try {
+    const codigo = String(req.params.codigo || '').trim().toUpperCase();
+    const { rows } = await query(
+      `SELECT b.id, b.codigo, b.tipo, b.preco, b.estado, b.usado_em,
+              b.comprador_nome, b.comprador_telefone,
+              e.nome AS evento_nome, e.slug AS evento_slug,
+              e.data_evento, e.local
+       FROM bilhetes b
+       JOIN eventos e ON e.id = b.evento_id
+       WHERE b.codigo = $1`,
+      [codigo]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: 'Bilhete não encontrado' });
+    }
+    const pdfBuffer = await gerarBilhetePDF(rows[0]);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `attachment; filename="bilhete-${codigo}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (e) {
+    console.error('[bilhetes/pdf]', e);
+    res.status(500).json({ ok: false, error: 'Erro ao gerar PDF' });
+  }
+});
+
+
 export default router;
