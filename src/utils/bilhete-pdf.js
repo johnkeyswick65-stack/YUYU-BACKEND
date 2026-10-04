@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import https from 'node:https';
 import { gerarQRBuffer, gerarBarcodeBuffer } from './codigos-visuais.js';
 
 /* Formato A5 vertical: 148 x 210 mm → em pontos PDF: 419.5 x 595.3 */
@@ -30,12 +31,51 @@ function toBuffer(data) {
   return null;
 }
 
+function fetchImagemHttps(url) {
+  return new Promise((resolve) => {
+    try {
+      const urlObj = new URL(url);
+      const opts = {
+        hostname: urlObj.hostname,
+        path: urlObj.pathname + urlObj.search,
+        method: 'GET',
+        timeout: 15000
+      };
+      const req = https.get(opts, (res) => {
+        if (res.statusCode !== 200) {
+          console.warn('[bilhete-pdf] Logo HTTP', res.statusCode);
+          res.resume();
+          return resolve(null);
+        }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          console.log('[bilhete-pdf] Logo OK:', buf.length, 'bytes');
+          resolve(buf);
+        });
+      });
+      req.on('error', (e) => {
+        console.warn('[bilhete-pdf] Logo erro:', e.message);
+        resolve(null);
+      });
+      req.on('timeout', () => {
+        console.warn('[bilhete-pdf] Logo timeout');
+        req.destroy();
+        resolve(null);
+      });
+    } catch (e) {
+      console.warn('[bilhete-pdf] URL invalido:', e.message);
+      resolve(null);
+    }
+  });
+}
+
 async function fetchImagem(url) {
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const ab = await res.arrayBuffer();
-    return toBuffer(Buffer.from(ab));
+    const buf = await fetchImagemHttps(url);
+    if (!buf) return null;
+    return buf;
   } catch (_) {
     return null;
   }
