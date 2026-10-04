@@ -334,6 +334,12 @@ router.get('/:codigo/pdf', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Bilhete não encontrado' });
     }
 
+    console.log('[PDF] bilhete recebido:', {
+      codigo: rows[0].codigo,
+      empresa_nome: rows[0].empresa_nome,
+      empresa_logo_url: rows[0].empresa_logo_url ? 'SIM' : 'NAO'
+    });
+
     const pdfBuffer = await gerarBilhetePDF(rows[0]);
 
     res.set('Content-Type', 'application/pdf');
