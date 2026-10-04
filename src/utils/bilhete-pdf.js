@@ -10,6 +10,36 @@ const VERMELHO_ESCURO = '#7f1d1d';
 const PRETO = '#0a0a0a';
 const CINZA = '#666666';
 const CINZA_CLARO = '#f4f4f4';
+const CINZA_LINHA = '#cccccc';
+
+/* Desenha uma linha tracejada horizontal */
+function linhaTracejada(doc, y, x1 = 24, x2 = LARGURA - 24) {
+  doc.save();
+  doc.strokeColor(CINZA_LINHA).lineWidth(1);
+  doc.dash(4, { space: 3 });
+  doc.moveTo(x1, y).lineTo(x2, y).stroke();
+  doc.undash();
+  doc.restore();
+}
+
+/* Converte ArrayBuffer/Buffer para Buffer */
+function toBuffer(data) {
+  if (!data) return null;
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof Uint8Array) return Buffer.from(data);
+  return null;
+}
+
+async function fetchImagem(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const ab = await res.arrayBuffer();
+    return toBuffer(Buffer.from(ab));
+  } catch (_) {
+    return null;
+  }
+}
 
 export async function gerarBilhetePDF(bilhete) {
   const doc = new PDFDocument({
@@ -27,27 +57,40 @@ export async function gerarBilhetePDF(bilhete) {
 
   /* ---------- Cabeçalho ---------- */
   doc.rect(0, 0, LARGURA, 70).fill(PRETO);
-
-  // Barra vermelha decorativa
   doc.rect(0, 70, LARGURA, 4).fill(VERMELHO);
+
+  // Logo da empresa (se existir) — canto esquerdo do cabeçalho
+  let logoBuffer = null;
+  if (bilhete.empresa_logo_url) {
+    logoBuffer = await fetchImagem(bilhete.empresa_logo_url);
+  }
+
+  if (logoBuffer) {
+    try {
+      doc.image(logoBuffer, 24, 14, { fit: [50, 42] });
+    } catch (_) {}
+  }
+
+  // Nome YUYU EVENTOS — deslocado para a direita se houver logo
+  const xMarca = logoBuffer ? 84 : 24;
 
   doc.fillColor('#ffffff')
      .font('Helvetica-Bold')
      .fontSize(20)
-     .text('YUYU', 24, 20, { continued: true })
+     .text('YUYU', xMarca, 20, { continued: true })
      .fillColor(VERMELHO)
      .text(' EVENTOS');
 
   doc.fillColor('#ffffff')
      .font('Helvetica')
-     .fontSize(9)
-     .text('Bilhete oficial', 24, 46);
+     .fontSize(8)
+     .text('Bilhete oficial', xMarca, 46);
 
   // Tipo (Normal/VIP) no canto direito
   const tipoLabel = (bilhete.tipo || 'normal').toUpperCase();
   const tipoLargura = 58;
-  doc.roundedRect(LARGURA - 24 - tipoLargura, 24, tipoLargura, 22, 6)
-     .fill(VERMELHO);
+
+  doc.roundedRect(LARGURA - 24 - tipoLargura, 24, tipoLargura, 22, 6).fill(VERMELHO);
 
   doc.fillColor('#ffffff')
      .font('Helvetica-Bold')
@@ -80,22 +123,20 @@ export async function gerarBilhetePDF(bilhete) {
   doc.fillColor(CINZA)
      .text(bilhete.local || '', 24, y);
 
-  /* ---------- Área QR + barras ---------- */
-  y = doc.y + 20;
+  /* ---------- Linha tracejada ---------- */
+  y = doc.y + 14;
+  linhaTracejada(doc, y);
+  y += 14;
 
-  // Fundo cinza claro
+  /* ---------- Área QR + barras ---------- */
   doc.roundedRect(24, y, LARGURA - 48, 220, 12).fill(CINZA_CLARO);
 
-  // QR code (centrado)
   const qrBuffer = await gerarQRBuffer(bilhete.codigo, { width: 500 });
   const qrTamanho = 130;
   const qrX = (LARGURA - qrTamanho) / 2;
 
-  doc.image(qrBuffer, qrX, y + 16, {
-    fit: [qrTamanho, qrTamanho]
-  });
+  doc.image(qrBuffer, qrX, y + 16, { fit: [qrTamanho, qrTamanho] });
 
-  // Código de barras (por baixo do QR)
   const barBuffer = await gerarBarcodeBuffer(bilhete.codigo, { scale: 3, height: 10 });
   const barLargura = LARGURA - 96;
   const barY = y + 16 + qrTamanho + 12;
@@ -124,9 +165,12 @@ export async function gerarBilhetePDF(bilhete) {
        characterSpacing: 1
      });
 
-  /* ---------- Dados do portador ---------- */
-  y = doc.y + 20;
+  /* ---------- Linha tracejada ---------- */
+  y = doc.y + 16;
+  linhaTracejada(doc, y);
+  y += 14;
 
+  /* ---------- Dados do portador ---------- */
   if (bilhete.comprador_nome) {
     doc.fillColor(CINZA)
        .font('Helvetica')
@@ -156,10 +200,24 @@ export async function gerarBilhetePDF(bilhete) {
   doc.rect(0, ALTURA - 40, LARGURA, 40).fill(PRETO);
   doc.rect(0, ALTURA - 40, LARGURA, 3).fill(VERMELHO);
 
+  // Nome da empresa (se existir) — mais destacado
+  const rodapeTexto = bilhete.empresa_nome
+    ? `Organizado por ${bilhete.empresa_nome}`
+    : 'Apresente este bilhete no dia do evento';
+
   doc.fillColor('#ffffff')
-     .font('Helvetica')
+     .font(bilhete.empresa_nome ? 'Helvetica-Bold' : 'Helvetica')
      .fontSize(9)
-     .text('Apresente este bilhete no dia do evento', 24, ALTURA - 27, {
+     .text(rodapeTexto, 24, ALTURA - 28, {
+       width: LARGURA - 48,
+       align: 'center'
+     });
+
+  // Pequeno crédito em baixo
+  doc.fillColor('#888888')
+     .font('Helvetica')
+     .fontSize(7)
+     .text('www.yuyu-eventos.mz', 24, ALTURA - 14, {
        width: LARGURA - 48,
        align: 'center'
      });
