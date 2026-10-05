@@ -2,28 +2,111 @@ import PDFDocument from 'pdfkit';
 import https from 'node:https';
 import { gerarQRBuffer, gerarBarcodeBuffer } from './codigos-visuais.js';
 
-/* Formato A5 vertical: 148 x 210 mm → em pontos PDF: 419.5 x 595.3 */
-const LARGURA = 419.5;
-const ALTURA = 595.3;
+/* A5 landscape: 210 x 148 mm = 595.3 x 419.5 pontos */
+const LARGURA = 595.3;
+const ALTURA = 419.5;
 
-const VERMELHO = '#dc2626';
-const VERMELHO_ESCURO = '#7f1d1d';
+/* Cores por tipo */
+const CORES = {
+  vip: {
+    principal: '#dc2626',
+    escuro: '#7f1d1d',
+    claro: '#fca5a5'
+  },
+  normal: {
+    principal: '#2563eb',
+    escuro: '#1e3a8a',
+    claro: '#93c5fd'
+  }
+};
+
 const PRETO = '#0a0a0a';
-const CINZA = '#666666';
-const CINZA_CLARO = '#f4f4f4';
-const CINZA_LINHA = '#cccccc';
+const PRETO_2 = '#141418';
+const CINZA = '#888888';
+const BRANCO = '#ffffff';
 
-/* Desenha uma linha tracejada horizontal */
-function linhaTracejada(doc, y, x1 = 24, x2 = LARGURA - 24) {
+/* Desenha ícone calendário (data) */
+function iconeData(doc, x, y, tam, cor) {
   doc.save();
-  doc.strokeColor(CINZA_LINHA).lineWidth(1);
-  doc.dash(4, { space: 3 });
-  doc.moveTo(x1, y).lineTo(x2, y).stroke();
-  doc.undash();
+  doc.strokeColor(cor).lineWidth(1.8).lineCap('round').lineJoin('round');
+  const w = tam;
+  const h = tam * 0.85;
+  const r = 2.5;
+
+  // Corpo
+  doc.roundedRect(x, y + tam * 0.15, w, h, r).stroke();
+
+  // Topo
+  doc.moveTo(x, y + tam * 0.15 + h * 0.3).lineTo(x + w, y + tam * 0.15 + h * 0.3).stroke();
+
+  // Anéis
+  doc.moveTo(x + w * 0.28, y).lineTo(x + w * 0.28, y + tam * 0.25).stroke();
+  doc.moveTo(x + w * 0.72, y).lineTo(x + w * 0.72, y + tam * 0.25).stroke();
+
   doc.restore();
 }
 
-/* Converte ArrayBuffer/Buffer para Buffer */
+/* Desenha ícone localização (pin) */
+function iconeLocal(doc, x, y, tam, cor) {
+  doc.save();
+  doc.fillColor(cor).strokeColor(cor).lineWidth(1.8).lineCap('round').lineJoin('round');
+  const cx = x + tam / 2;
+  const cy = y + tam * 0.42;
+  const r = tam * 0.3;
+
+  // Círculo exterior (pin)
+  doc.circle(cx, cy, r).stroke();
+
+  // Ponta do pin
+  doc.moveTo(cx - r * 0.75, cy + r * 0.75)
+     .lineTo(cx, y + tam * 1.05)
+     .lineTo(cx + r * 0.75, cy + r * 0.75)
+     .stroke();
+
+  // Círculo interior
+  doc.circle(cx, cy, r * 0.35).fill();
+
+  doc.restore();
+}
+
+/* Desenha ícone utilizador */
+function iconeUser(doc, x, y, tam, cor) {
+  doc.save();
+  doc.strokeColor(cor).lineWidth(1.8).lineCap('round').lineJoin('round');
+  const cx = x + tam / 2;
+
+  // Cabeça
+  doc.circle(cx, y + tam * 0.3, tam * 0.22).stroke();
+
+  // Ombros
+  doc.moveTo(x + tam * 0.12, y + tam * 0.98)
+     .lineTo(x + tam * 0.12, y + tam * 0.78)
+     .quadraticCurveTo(x + tam * 0.12, y + tam * 0.58, cx, y + tam * 0.58)
+     .quadraticCurveTo(x + tam * 0.88, y + tam * 0.58, x + tam * 0.88, y + tam * 0.78)
+     .lineTo(x + tam * 0.88, y + tam * 0.98)
+     .stroke();
+
+  doc.restore();
+}
+
+/* Desenha ícone bilhete (tipo) */
+function iconeBilhete(doc, x, y, tam, cor) {
+  doc.save();
+  doc.strokeColor(cor).lineWidth(1.8).lineCap('round').lineJoin('round');
+  const w = tam;
+  const h = tam * 0.7;
+  const r = 2.5;
+
+  doc.roundedRect(x, y + tam * 0.15, w, h, r).stroke();
+
+  // Furos laterais
+  doc.circle(x + w * 0.14, y + tam * 0.15 + h / 2, 1.5).fill();
+  doc.circle(x + w * 0.86, y + tam * 0.15 + h / 2, 1.5).fill();
+
+  doc.restore();
+}
+
+/* Converte dados em Buffer */
 function toBuffer(data) {
   if (!data) return null;
   if (Buffer.isBuffer(data)) return data;
@@ -31,6 +114,7 @@ function toBuffer(data) {
   return null;
 }
 
+/* Carrega imagem via https nativo */
 function fetchImagemHttps(url) {
   return new Promise((resolve) => {
     try {
@@ -43,45 +127,33 @@ function fetchImagemHttps(url) {
       };
       const req = https.get(opts, (res) => {
         if (res.statusCode !== 200) {
-          console.warn('[bilhete-pdf] Logo HTTP', res.statusCode);
+          console.warn('[bilhete-pdf] Imagem HTTP', res.statusCode);
           res.resume();
           return resolve(null);
         }
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
-        res.on('end', () => {
-          const buf = Buffer.concat(chunks);
-          console.log('[bilhete-pdf] Logo OK:', buf.length, 'bytes');
-          resolve(buf);
-        });
+        res.on('end', () => resolve(Buffer.concat(chunks)));
       });
       req.on('error', (e) => {
-        console.warn('[bilhete-pdf] Logo erro:', e.message);
+        console.warn('[bilhete-pdf] Imagem erro:', e.message);
         resolve(null);
       });
       req.on('timeout', () => {
-        console.warn('[bilhete-pdf] Logo timeout');
+        console.warn('[bilhete-pdf] Imagem timeout');
         req.destroy();
         resolve(null);
       });
     } catch (e) {
-      console.warn('[bilhete-pdf] URL invalido:', e.message);
       resolve(null);
     }
   });
 }
 
-async function fetchImagem(url) {
-  try {
-    const buf = await fetchImagemHttps(url);
-    if (!buf) return null;
-    return buf;
-  } catch (_) {
-    return null;
-  }
-}
-
 export async function gerarBilhetePDF(bilhete) {
+  const tipo = (bilhete.tipo || 'normal').toLowerCase();
+  const cores = CORES[tipo] || CORES.normal;
+
   const doc = new PDFDocument({
     size: [LARGURA, ALTURA],
     margin: 0,
@@ -95,171 +167,253 @@ export async function gerarBilhetePDF(bilhete) {
   const chunks = [];
   doc.on('data', (c) => chunks.push(c));
 
-  /* ---------- Cabeçalho ---------- */
-  doc.rect(0, 0, LARGURA, 70).fill(PRETO);
-  doc.rect(0, 70, LARGURA, 4).fill(VERMELHO);
+  /* Fundo geral escuro */
+  doc.rect(0, 0, LARGURA, ALTURA).fill(PRETO_2);
 
-  // Logo da empresa (se existir) — canto esquerdo do cabeçalho
+  /* ============ METADE ESQUERDA — POSTER ============ */
+  const posterLargura = LARGURA / 2;
+  let posterBuffer = null;
+  if (bilhete.poster_url) {
+    posterBuffer = await fetchImagemHttps(bilhete.poster_url);
+  }
+
+  if (posterBuffer) {
+    try {
+      // Desenha o poster (metade esquerda)
+      doc.save();
+      doc.rect(0, 0, posterLargura, ALTURA).clip();
+      doc.image(posterBuffer, 0, 0, {
+        fit: [posterLargura, ALTURA],
+        align: 'center',
+        valign: 'center'
+      });
+      doc.restore();
+
+      // Fade para preto da esquerda para a direita (últimos 40% da metade esquerda)
+      const inicioFade = posterLargura * 0.55;
+      const passos = 40;
+      for (let i = 0; i < passos; i++) {
+        const t = i / passos;
+        const x = inicioFade + (posterLargura - inicioFade) * t;
+        const largura = (posterLargura - inicioFade) / passos + 0.5;
+        const opacidade = t * t; // quadrático para fade suave
+        doc.save();
+        doc.fillOpacity(opacidade);
+        doc.rect(x, 0, largura, ALTURA).fill(PRETO_2);
+        doc.restore();
+      }
+
+      // Sombra suave na transição
+      const inicioSombra = posterLargura - 30;
+      for (let i = 0; i < 30; i++) {
+        const x = inicioSombra + i;
+        const opacidade = (i / 30) * 0.6;
+        doc.save();
+        doc.fillOpacity(opacidade);
+        doc.rect(x, 0, 1, ALTURA).fill(PRETO_2);
+        doc.restore();
+      }
+    } catch (e) {
+      console.warn('[bilhete-pdf] Erro ao desenhar poster:', e.message);
+      doc.rect(0, 0, posterLargura, ALTURA).fill(PRETO);
+    }
+  } else {
+    // Fallback sem poster: fundo com gradiente da cor do tipo
+    doc.save();
+    doc.rect(0, 0, posterLargura, ALTURA).fill(cores.escuro);
+    doc.restore();
+  }
+
+  /* ============ METADE DIREITA — INFO ============ */
+  const infoX = posterLargura + 24;
+  const infoLargura = LARGURA - infoX - 24;
+
+  /* Faixa superior colorida */
+  doc.rect(posterLargura, 0, LARGURA - posterLargura, 4).fill(cores.principal);
+
+  /* Badge do tipo (VIP / NORMAL) */
+  const tipoLabel = tipo === 'vip' ? 'VIP' : 'NORMAL';
+  const badgeLargura = 68;
+  const badgeX = LARGURA - 24 - badgeLargura;
+
+  doc.roundedRect(badgeX, 22, badgeLargura, 24, 6).fill(cores.principal);
+  doc.fillColor(BRANCO)
+     .font('Helvetica-Bold')
+     .fontSize(11)
+     .text(tipoLabel, badgeX, 29, { width: badgeLargura, align: 'center' });
+
+  /* Marca YUYU EVENTOS (canto superior esquerdo da metade direita) */
+  doc.fillColor(BRANCO)
+     .font('Helvetica-Bold')
+     .fontSize(13)
+     .text('YUYU', infoX, 26, { continued: true })
+     .fillColor(cores.principal)
+     .text(' EVENTOS');
+
+  /* Linha de separação */
+  doc.moveTo(infoX, 58)
+     .lineTo(LARGURA - 24, 58)
+     .lineWidth(1)
+     .strokeColor('rgba(255,255,255,0.1)')
+     .stroke();
+
+  /* ============ NOME DO EVENTO ============ */
+  let y = 74;
+
+  doc.fillColor(BRANCO)
+     .font('Helvetica-Bold')
+     .fontSize(22)
+     .text(bilhete.evento_nome || 'Evento', infoX, y, {
+       width: infoLargura,
+       align: 'left',
+       lineGap: -2
+     });
+
+  y = doc.y + 14;
+
+  /* ============ BLOCO DE INFO (DATA / LOCAL / TITULAR) ============ */
+  const linhaAltura = 34;
+  const iconeTam = 16;
+
+  // Data
+  if (bilhete.data_evento) {
+    iconeData(doc, infoX, y + 2, iconeTam, cores.claro);
+    doc.fillColor(CINZA)
+       .font('Helvetica')
+       .fontSize(9)
+       .text('DATA', infoX + iconeTam + 10, y - 1, { characterSpacing: 1 });
+    doc.fillColor(BRANCO)
+       .font('Helvetica-Bold')
+       .fontSize(12)
+       .text(formatarData(bilhete.data_evento), infoX + iconeTam + 10, y + 10);
+    y += linhaAltura;
+  }
+
+  // Local
+  if (bilhete.local) {
+    iconeLocal(doc, infoX, y + 2, iconeTam, cores.claro);
+    doc.fillColor(CINZA)
+       .font('Helvetica')
+       .fontSize(9)
+       .text('LOCAL', infoX + iconeTam + 10, y - 1, { characterSpacing: 1 });
+    doc.fillColor(BRANCO)
+       .font('Helvetica-Bold')
+       .fontSize(12)
+       .text(bilhete.local, infoX + iconeTam + 10, y + 10, { width: infoLargura - iconeTam - 10 });
+    y += linhaAltura;
+  }
+
+  // Titular
+  if (bilhete.comprador_nome) {
+    iconeUser(doc, infoX, y + 2, iconeTam, cores.claro);
+    doc.fillColor(CINZA)
+       .font('Helvetica')
+       .fontSize(9)
+       .text('TITULAR', infoX + iconeTam + 10, y - 1, { characterSpacing: 1 });
+    doc.fillColor(BRANCO)
+       .font('Helvetica-Bold')
+       .fontSize(12)
+       .text(bilhete.comprador_nome, infoX + iconeTam + 10, y + 10, { width: infoLargura - iconeTam - 10 });
+    y += linhaAltura;
+  }
+
+  /* ============ LINHA TRACEJADA ============ */
+  y += 8;
+  doc.save();
+  doc.strokeColor('rgba(255,255,255,0.15)').lineWidth(1);
+  doc.dash(4, { space: 3 });
+  doc.moveTo(infoX, y).lineTo(LARGURA - 24, y).stroke();
+  doc.undash();
+  doc.restore();
+  y += 14;
+
+  /* ============ QR + BARRAS + CÓDIGO ============ */
+  const qrBuffer = await gerarQRBuffer(bilhete.codigo, { width: 400 });
+  const qrTamanho = 80;
+
+  // QR à esquerda
+  doc.image(qrBuffer, infoX, y, { fit: [qrTamanho, qrTamanho] });
+
+  // Barras + código à direita do QR
+  const barBuffer = await gerarBarcodeBuffer(bilhete.codigo, { scale: 2, height: 8 });
+  const barX = infoX + qrTamanho + 12;
+  const barLargura = infoLargura - qrTamanho - 12;
+
+  doc.image(barBuffer, barX, y + 10, { fit: [barLargura, 30] });
+
+  doc.fillColor(CINZA)
+     .font('Helvetica')
+     .fontSize(7)
+     .text('CÓDIGO', barX, y + 46, { characterSpacing: 1 });
+
+  doc.fillColor(cores.claro)
+     .font('Courier-Bold')
+     .fontSize(11)
+     .text(bilhete.codigo, barX, y + 56, { width: barLargura, characterSpacing: 0.5 });
+
+  /* ============ PREÇO (canto inferior direito) ============ */
+  const precoY = ALTURA - 62;
+  const precoTexto = `${bilhete.preco || 0} MT`;
+
+  doc.fillColor(CINZA)
+     .font('Helvetica')
+     .fontSize(8)
+     .text('VALOR', LARGURA - 24 - 100, precoY, {
+       width: 100,
+       align: 'right',
+       characterSpacing: 1
+     });
+
+  doc.fillColor(cores.principal)
+     .font('Helvetica-Bold')
+     .fontSize(24)
+     .text(precoTexto, LARGURA - 24 - 150, precoY + 10, {
+       width: 150,
+       align: 'right'
+     });
+
+  /* ============ RODAPÉ — EMPRESA ============ */
+  doc.rect(0, ALTURA - 32, LARGURA, 32).fill(PRETO);
+  doc.rect(0, ALTURA - 32, LARGURA, 2.5).fill(cores.principal);
+
+  // Logo da empresa (se existir)
   let logoBuffer = null;
   if (bilhete.empresa_logo_url) {
-    logoBuffer = await fetchImagem(bilhete.empresa_logo_url);
+    logoBuffer = await fetchImagemHttps(bilhete.empresa_logo_url);
   }
 
   if (logoBuffer) {
     try {
-      doc.image(logoBuffer, 24, 14, { fit: [50, 42] });
+      doc.image(logoBuffer, 24, ALTURA - 28, { fit: [44, 22] });
     } catch (_) {}
   }
 
-  // Nome YUYU EVENTOS — deslocado para a direita se houver logo
-  const xMarca = logoBuffer ? 84 : 24;
+  const xEmpresa = logoBuffer ? 76 : 24;
 
-  doc.fillColor('#ffffff')
-     .font('Helvetica-Bold')
-     .fontSize(20)
-     .text('YUYU', xMarca, 20, { continued: true })
-     .fillColor(VERMELHO)
-     .text(' EVENTOS');
-
-  doc.fillColor('#ffffff')
-     .font('Helvetica')
-     .fontSize(8)
-     .text('Bilhete oficial', xMarca, 46);
-
-  // Tipo (Normal/VIP) no canto direito
-  const tipoLabel = (bilhete.tipo || 'normal').toUpperCase();
-  const tipoLargura = 58;
-
-  doc.roundedRect(LARGURA - 24 - tipoLargura, 24, tipoLargura, 22, 6).fill(VERMELHO);
-
-  doc.fillColor('#ffffff')
-     .font('Helvetica-Bold')
-     .fontSize(11)
-     .text(tipoLabel, LARGURA - 24 - tipoLargura, 29, {
-       width: tipoLargura,
-       align: 'center'
-     });
-
-  /* ---------- Nome do evento ---------- */
-  let y = 100;
-
-  doc.fillColor(PRETO)
-     .font('Helvetica-Bold')
-     .fontSize(18)
-     .text(bilhete.evento_nome || 'Evento', 24, y, {
-       width: LARGURA - 48,
-       align: 'left'
-     });
-
-  y = doc.y + 6;
-
-  doc.fillColor(CINZA)
-     .font('Helvetica')
-     .fontSize(10)
-     .text(formatarData(bilhete.data_evento), 24, y);
-
-  y = doc.y + 2;
-
-  doc.fillColor(CINZA)
-     .text(bilhete.local || '', 24, y);
-
-  /* ---------- Linha tracejada ---------- */
-  y = doc.y + 14;
-  linhaTracejada(doc, y);
-  y += 14;
-
-  /* ---------- Área QR + barras ---------- */
-  doc.roundedRect(24, y, LARGURA - 48, 220, 12).fill(CINZA_CLARO);
-
-  const qrBuffer = await gerarQRBuffer(bilhete.codigo, { width: 500 });
-  const qrTamanho = 130;
-  const qrX = (LARGURA - qrTamanho) / 2;
-
-  doc.image(qrBuffer, qrX, y + 16, { fit: [qrTamanho, qrTamanho] });
-
-  const barBuffer = await gerarBarcodeBuffer(bilhete.codigo, { scale: 3, height: 10 });
-  const barLargura = LARGURA - 96;
-  const barY = y + 16 + qrTamanho + 12;
-
-  doc.image(barBuffer, 48, barY, {
-    fit: [barLargura, 40],
-    align: 'center'
-  });
-
-  /* ---------- Código legível ---------- */
-  y += 220 + 14;
-
-  doc.fillColor(CINZA)
-     .font('Helvetica')
-     .fontSize(8)
-     .text('CÓDIGO DO BILHETE', 24, y, { width: LARGURA - 48, align: 'center' });
-
-  y = doc.y + 4;
-
-  doc.fillColor(PRETO)
-     .font('Courier-Bold')
-     .fontSize(15)
-     .text(bilhete.codigo, 24, y, {
-       width: LARGURA - 48,
-       align: 'center',
-       characterSpacing: 1
-     });
-
-  /* ---------- Linha tracejada ---------- */
-  y = doc.y + 16;
-  linhaTracejada(doc, y);
-  y += 14;
-
-  /* ---------- Dados do portador ---------- */
-  if (bilhete.comprador_nome) {
+  if (bilhete.empresa_nome) {
     doc.fillColor(CINZA)
        .font('Helvetica')
-       .fontSize(8)
-       .text('TITULAR', 24, y);
+       .fontSize(7)
+       .text('ORGANIZADO POR', xEmpresa, ALTURA - 26, { characterSpacing: 1 });
 
-    doc.fillColor(PRETO)
+    doc.fillColor(BRANCO)
        .font('Helvetica-Bold')
-       .fontSize(12)
-       .text(bilhete.comprador_nome, 24, doc.y + 2);
+       .fontSize(11)
+       .text(bilhete.empresa_nome, xEmpresa, ALTURA - 17);
+  } else {
+    doc.fillColor(BRANCO)
+       .font('Helvetica-Bold')
+       .fontSize(10)
+       .text('Apresente este bilhete no dia do evento', xEmpresa, ALTURA - 20);
   }
 
-  /* ---------- Preço ---------- */
-  const precoY = ALTURA - 90;
-
-  doc.fillColor(CINZA)
+  // Web no canto direito
+  doc.fillColor('rgba(255,255,255,0.4)')
      .font('Helvetica')
      .fontSize(8)
-     .text('VALOR', 24, precoY);
-
-  doc.fillColor(VERMELHO)
-     .font('Helvetica-Bold')
-     .fontSize(22)
-     .text(`${bilhete.preco || 0} MT`, 24, precoY + 12);
-
-  /* ---------- Rodapé ---------- */
-  doc.rect(0, ALTURA - 40, LARGURA, 40).fill(PRETO);
-  doc.rect(0, ALTURA - 40, LARGURA, 3).fill(VERMELHO);
-
-  // Nome da empresa (se existir) — mais destacado
-  const rodapeTexto = bilhete.empresa_nome
-    ? `Organizado por ${bilhete.empresa_nome}`
-    : 'Apresente este bilhete no dia do evento';
-
-  doc.fillColor('#ffffff')
-     .font(bilhete.empresa_nome ? 'Helvetica-Bold' : 'Helvetica')
-     .fontSize(9)
-     .text(rodapeTexto, 24, ALTURA - 28, {
-       width: LARGURA - 48,
-       align: 'center'
-     });
-
-  // Pequeno crédito em baixo
-  doc.fillColor('#888888')
-     .font('Helvetica')
-     .fontSize(7)
-     .text('www.yuyu-eventos.mz', 24, ALTURA - 14, {
-       width: LARGURA - 48,
-       align: 'center'
+     .text('www.yuyu-eventos.mz', LARGURA - 24 - 150, ALTURA - 20, {
+       width: 150,
+       align: 'right'
      });
 
   doc.end();
