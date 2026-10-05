@@ -323,7 +323,7 @@ router.get('/:codigo/pdf', async (req, res) => {
         b.id, b.codigo, b.tipo, b.preco, b.estado, b.usado_em,
         b.comprador_nome, b.comprador_telefone,
         e.nome AS evento_nome, e.slug AS evento_slug,
-        e.data_evento, e.local,
+        e.data_evento, e.local, e.poster_url,
         e.empresa_nome, e.empresa_logo_url
        FROM bilhetes b
        JOIN eventos e ON e.id = b.evento_id
