@@ -60,25 +60,60 @@ function iconeUser(doc, x, y, tam, cor) {
   doc.restore();
 }
 
-function fetchImagemHttps(url) {
+function fetchImagemHttps(url, profundidade = 0) {
   return new Promise((resolve) => {
+    if (profundidade > 5) {
+      console.warn('[bilhete-pdf] Demasiados redirecionamentos');
+      return resolve(null);
+    }
+
     try {
       const urlObj = new URL(url);
       const opts = {
         hostname: urlObj.hostname,
         path: urlObj.pathname + urlObj.search,
         method: 'GET',
-        timeout: 15000
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'YUYU-Eventos-PDF/1.0'
+        }
       };
+
       const req = https.get(opts, (res) => {
-        if (res.statusCode !== 200) { res.resume(); return resolve(null); }
+        // Redireccionamento (301, 302, 303, 307, 308)
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          const novaUrl = new URL(res.headers.location, url).toString();
+          console.log('[bilhete-pdf] Redirecionando para:', novaUrl.slice(0, 80));
+          return fetchImagemHttps(novaUrl, profundidade + 1).then(resolve);
+        }
+
+        if (res.statusCode !== 200) {
+          console.warn('[bilhete-pdf] Imagem HTTP', res.statusCode, 'em', url.slice(0, 60));
+          res.resume();
+          return resolve(null);
+        }
+
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          console.log('[bilhete-pdf] Imagem OK:', buf.length, 'bytes');
+          resolve(buf);
+        });
       });
-      req.on('error', () => resolve(null));
-      req.on('timeout', () => { req.destroy(); resolve(null); });
-    } catch (_) {
+
+      req.on('error', (e) => {
+        console.warn('[bilhete-pdf] Erro fetch:', e.message);
+        resolve(null);
+      });
+      req.on('timeout', () => {
+        console.warn('[bilhete-pdf] Timeout no fetch');
+        req.destroy();
+        resolve(null);
+      });
+    } catch (e) {
+      console.warn('[bilhete-pdf] URL invalida:', e.message);
       resolve(null);
     }
   });
