@@ -210,4 +210,152 @@ router.get('/armazenamento', requireAuth, async (req, res) => {
 });
 
 
+
+/* ============================================================
+   GET /api/admin/imagens — lista todas as imagens no Cloudinary
+   Marca quais são órfãs (não ligadas a nenhum evento)
+   ============================================================ */
+router.get('/imagens', requireAuth, async (req, res) => {
+  try {
+    // 1. Buscar todas as imagens do Cloudinary (até 500)
+    let recursos = [];
+    try {
+      const resultado = await cloudinary.v2.api.resources({
+        type: 'upload',
+        max_results: 500,
+        resource_type: 'image'
+      });
+      recursos = resultado.resources || [];
+    } catch (e) {
+      console.error('[imagens] Cloudinary falhou:', e.message);
+      return res.status(500).json({ ok: false, error: 'Falha ao listar imagens do Cloudinary' });
+    }
+
+    // 2. Buscar todos os public_ids em uso nos eventos
+    const { rows: eventos } = await query(`
+      SELECT id, nome, slug,
+             poster_public_id, empresa_logo_public_id,
+             foto1_public_id, foto2_public_id
+      FROM eventos
+    `);
+
+    const usados = new Set();
+    const mapaEvento = {};
+
+    eventos.forEach(ev => {
+      [['poster', ev.poster_public_id],
+       ['logo', ev.empresa_logo_public_id],
+       ['foto1', ev.foto1_public_id],
+       ['foto2', ev.foto2_public_id]].forEach(([tipo, pid]) => {
+        if (pid) {
+          usados.add(pid);
+          mapaEvento[pid] = { evento_id: ev.id, evento_nome: ev.nome, tipo };
+        }
+      });
+    });
+
+    // 3. Montar a lista
+    const imagens = recursos.map(r => {
+      const emUso = usados.has(r.public_id);
+      return {
+        public_id: r.public_id,
+        url: r.secure_url,
+        thumbnail: r.secure_url.replace('/upload/', '/upload/w_150,h_150,c_fill/'),
+        bytes: r.bytes,
+        kb: Math.round(r.bytes / 1024),
+        formato: r.format,
+        largura: r.width,
+        altura: r.height,
+        criado_em: r.created_at,
+        em_uso: emUso,
+        orfa: !emUso,
+        evento: emUso ? mapaEvento[r.public_id].evento_nome : null,
+        tipo: emUso ? mapaEvento[r.public_id].tipo : null
+      };
+    });
+
+    // Ordenar: órfãs primeiro, maiores primeiro
+    imagens.sort((a, b) => {
+      if (a.orfa !== b.orfa) return a.orfa ? -1 : 1;
+      return b.bytes - a.bytes;
+    });
+
+    const totalBytes = imagens.reduce((s, i) => s + i.bytes, 0);
+    const orfasBytes = imagens.filter(i => i.orfa).reduce((s, i) => s + i.bytes, 0);
+    const usadosBytes = totalBytes - orfasBytes;
+
+    res.json({
+      ok: true,
+      total: imagens.length,
+      total_mb: Math.round(totalBytes / 1024 / 1024 * 100) / 100,
+      orfas: imagens.filter(i => i.orfa).length,
+      orfas_mb: Math.round(orfasBytes / 1024 / 1024 * 100) / 100,
+      em_uso: imagens.filter(i => !i.orfa).length,
+      em_uso_mb: Math.round(usadosBytes / 1024 / 1024 * 100) / 100,
+      imagens: imagens
+    });
+  } catch (e) {
+    console.error('[admin/imagens]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   POST /api/admin/imagens/apagar
+   Body: { public_ids: ['id1', 'id2', ...] }
+   Apaga apenas os IDs indicados.
+   ============================================================ */
+router.post('/imagens/apagar', requireAuth, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.public_ids) ? req.body.public_ids : [];
+    if (!ids.length) {
+      return res.status(400).json({ ok: false, error: 'Nenhum ID fornecido' });
+    }
+
+    // Verificar quais estão em uso (não deixar apagar)
+    const { rows: eventos } = await query(`
+      SELECT poster_public_id, empresa_logo_public_id,
+             foto1_public_id, foto2_public_id
+      FROM eventos
+    `);
+
+    const emUso = new Set();
+    eventos.forEach(ev => {
+      [ev.poster_public_id, ev.empresa_logo_public_id,
+       ev.foto1_public_id, ev.foto2_public_id].forEach(pid => {
+        if (pid) emUso.add(pid);
+      });
+    });
+
+    const seguros = ids.filter(id => !emUso.has(id));
+    const bloqueados = ids.filter(id => emUso.has(id));
+
+    const apagados = [];
+    const erros = [];
+
+    for (const pid of seguros) {
+      try {
+        const r = await cloudinary.v2.uploader.destroy(pid);
+        if (r.result === 'ok') apagados.push(pid);
+        else erros.push({ id: pid, motivo: r.result });
+      } catch (e) {
+        erros.push({ id: pid, motivo: e.message });
+      }
+    }
+
+    res.json({
+      ok: true,
+      apagados: apagados.length,
+      bloqueados: bloqueados.length,
+      bloqueados_ids: bloqueados,
+      erros: erros,
+      detalhe: { apagados, erros }
+    });
+  } catch (e) {
+    console.error('[admin/imagens/apagar]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+
 export default router;
