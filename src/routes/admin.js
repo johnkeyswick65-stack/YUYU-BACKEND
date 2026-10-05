@@ -1,6 +1,7 @@
 import express from 'express';
 import { query } from '../db.js';
 import { requireAuth } from '../auth.js';
+import cloudinary from 'cloudinary';
 
 const router = express.Router();
 
@@ -111,5 +112,102 @@ router.get('/contas', requireAuth, async (req, res) => {
     res.status(500).json({ ok: false, error: 'Erro no servidor' });
   }
 });
+
+
+/* ============================================================
+   GET /api/admin/armazenamento — uso de espaço e contagens
+   ============================================================ */
+router.get('/armazenamento', requireAuth, async (req, res) => {
+  try {
+    // 1. Uso do Cloudinary
+    let cloud = {
+      disponivel: false,
+      usado_mb: 0,
+      limite_mb: 25600,
+      percentagem: 0,
+      ficheiros: 0,
+      bandwidth_mb: 0,
+      plano: 'unknown'
+    };
+
+    try {
+      const usage = await cloudinary.v2.api.usage();
+      const usado_bytes = usage.storage?.usage || 0;
+      const limite_bytes = usage.storage?.limit || 0;
+      const usado_mb = Math.round(usado_bytes / 1024 / 1024 * 100) / 100;
+      const limite_mb = Math.round(limite_bytes / 1024 / 1024);
+
+      cloud = {
+        disponivel: true,
+        usado_mb: usado_mb,
+        limite_mb: limite_mb || 25600,
+        percentagem: limite_mb > 0 ? Math.round((usado_mb / limite_mb) * 100) : 0,
+        ficheiros: usage.resources || 0,
+        bandwidth_mb: Math.round((usage.bandwidth?.usage || 0) / 1024 / 1024),
+        plano: usage.plan || 'Free'
+      };
+    } catch (e) {
+      console.warn('[armazenamento] Cloudinary falhou:', e.message);
+    }
+
+    // 2. Contagens na base de dados
+    const { rows: contagens } = await query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM eventos) AS eventos,
+        (SELECT COUNT(*)::int FROM bilhetes) AS bilhetes,
+        (SELECT COUNT(*)::int FROM admins) AS admins,
+        (SELECT COUNT(*)::int FROM validacoes) AS validacoes,
+        (SELECT COUNT(*)::int FROM eventos WHERE poster_url IS NOT NULL) AS eventos_com_poster,
+        (SELECT COUNT(*)::int FROM eventos WHERE empresa_logo_url IS NOT NULL) AS eventos_com_logo,
+        (SELECT COUNT(*)::int FROM eventos WHERE foto1_url IS NOT NULL) AS eventos_foto1,
+        (SELECT COUNT(*)::int FROM eventos WHERE foto2_url IS NOT NULL) AS eventos_foto2
+    `);
+
+    // 3. Top eventos por número de imagens
+    const { rows: topEventos } = await query(`
+      SELECT
+        id, nome, slug,
+        (CASE WHEN poster_url IS NOT NULL THEN 1 ELSE 0 END +
+         CASE WHEN empresa_logo_url IS NOT NULL THEN 1 ELSE 0 END +
+         CASE WHEN foto1_url IS NOT NULL THEN 1 ELSE 0 END +
+         CASE WHEN foto2_url IS NOT NULL THEN 1 ELSE 0 END) AS total_imagens
+      FROM eventos
+      ORDER BY total_imagens DESC, id DESC
+      LIMIT 5
+    `);
+
+    // 4. Estimativa total de imagens
+    const c = contagens[0];
+    const totalImagens =
+      c.eventos_com_poster +
+      c.eventos_com_logo +
+      c.eventos_foto1 +
+      c.eventos_foto2;
+
+    res.json({
+      ok: true,
+      cloudinary: cloud,
+      base_dados: {
+        eventos: c.eventos,
+        bilhetes: c.bilhetes,
+        admins: c.admins,
+        validacoes: c.validacoes,
+        total_registos: c.eventos + c.bilhetes + c.admins + c.validacoes
+      },
+      imagens: {
+        total: totalImagens,
+        posters: c.eventos_com_poster,
+        logos: c.eventos_com_logo,
+        fotos_extra: c.eventos_foto1 + c.eventos_foto2
+      },
+      top_eventos: topEventos,
+      timestamp: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error('[admin/armazenamento]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
 
 export default router;
