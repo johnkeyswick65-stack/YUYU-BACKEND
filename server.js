@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
+import { registarEVerificar } from './src/middleware-acessos.js';
 import { warmup } from './src/db.js';
 import authRoutes from './src/routes/auth.js';
 import eventosRoutes from './src/routes/eventos.js';
@@ -16,6 +17,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
+app.use(registarEVerificar);
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/api/health', (req, res) => {

@@ -358,4 +358,159 @@ router.post('/imagens/apagar', requireAuth, async (req, res) => {
 });
 
 
+
+/* ============================================================
+   GET /api/admin/acessos — lista de acessos recentes
+   Query: ?limit=100&ip=1.2.3.4
+   ============================================================ */
+router.get('/acessos', requireAuth, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const ipFiltro = req.query.ip ? String(req.query.ip).trim() : null;
+    const apenasSuspeitos = req.query.suspeitos === '1';
+
+    const params = [];
+    const where = [];
+
+    if (ipFiltro) {
+      params.push(ipFiltro);
+      where.push(`ip = $${params.length}`);
+    }
+
+    if (apenasSuspeitos) {
+      where.push(`(status >= 400 OR rota LIKE '%/auth/login%')`);
+    }
+
+    const whereSQL = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+    params.push(limit);
+    const { rows } = await query(
+      `SELECT a.*, adm.username AS admin_username
+       FROM acessos a
+       LEFT JOIN admins adm ON adm.id = a.admin_id
+       ${whereSQL}
+       ORDER BY a.criado_em DESC
+       LIMIT $${params.length}`,
+      params
+    );
+
+    res.json({ ok: true, total: rows.length, acessos: rows });
+  } catch (e) {
+    console.error('[admin/acessos]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   GET /api/admin/acessos/resumo — IPs mais activos
+   ============================================================ */
+router.get('/acessos/resumo', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT
+        ip,
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status >= 400)::int AS erros,
+        MAX(criado_em) AS ultimo_acesso,
+        COUNT(DISTINCT rota)::int AS rotas_distintas
+      FROM acessos
+      WHERE criado_em > NOW() - INTERVAL '24 hours'
+      GROUP BY ip
+      ORDER BY total DESC
+      LIMIT 30
+    `);
+
+    // Bloqueados
+    const { rows: bloqueados } = await query(`
+      SELECT b.*, a.username AS admin_username
+      FROM bloqueios b
+      LEFT JOIN admins a ON a.id = b.bloqueado_por
+      WHERE b.expira_em IS NULL OR b.expira_em > NOW()
+      ORDER BY b.criado_em DESC
+    `);
+
+    res.json({
+      ok: true,
+      ips_activos: rows,
+      bloqueados
+    });
+  } catch (e) {
+    console.error('[admin/acessos/resumo]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   POST /api/admin/bloquear — bloquear um IP
+   Body: { ip, motivo, horas }
+   ============================================================ */
+router.post('/bloquear', requireAuth, async (req, res) => {
+  try {
+    const ip = String(req.body?.ip || '').trim();
+    const motivo = String(req.body?.motivo || 'Sem motivo').slice(0, 200);
+    const horas = Number(req.body?.horas) || 0; // 0 = permanente
+
+    if (!ip) {
+      return res.status(400).json({ ok: false, error: 'IP obrigatório' });
+    }
+
+    const expira = horas > 0
+      ? `NOW() + INTERVAL '${horas} hours'`
+      : 'NULL';
+
+    await query(
+      `INSERT INTO bloqueios (ip, motivo, bloqueado_por, expira_em)
+       VALUES ($1, $2, $3, ${expira})
+       ON CONFLICT (ip) DO UPDATE
+       SET motivo = EXCLUDED.motivo,
+           bloqueado_por = EXCLUDED.bloqueado_por,
+           criado_em = NOW(),
+           expira_em = EXCLUDED.expira_em`,
+      [ip, motivo, req.admin.id]
+    );
+
+    res.json({ ok: true, message: 'IP bloqueado' });
+  } catch (e) {
+    console.error('[admin/bloquear]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   DELETE /api/admin/desbloquear/:ip
+   ============================================================ */
+router.delete('/desbloquear/:ip', requireAuth, async (req, res) => {
+  try {
+    const ip = String(req.params.ip || '').trim();
+    const r = await query('DELETE FROM bloqueios WHERE ip = $1', [ip]);
+
+    if (!r.rowCount) {
+      return res.status(404).json({ ok: false, error: 'IP não está bloqueado' });
+    }
+
+    res.json({ ok: true, message: 'IP desbloqueado' });
+  } catch (e) {
+    console.error('[admin/desbloquear]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   DELETE /api/admin/acessos/limpar — limpa registos antigos
+   Query: ?dias=30
+   ============================================================ */
+router.delete('/acessos/limpar', requireAuth, async (req, res) => {
+  try {
+    const dias = Math.max(1, Number(req.query.dias) || 30);
+    const r = await query(
+      `DELETE FROM acessos WHERE criado_em < NOW() - INTERVAL '${dias} days'`
+    );
+    res.json({ ok: true, apagados: r.rowCount });
+  } catch (e) {
+    console.error('[admin/acessos/limpar]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+
 export default router;
