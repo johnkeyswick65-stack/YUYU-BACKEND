@@ -280,7 +280,7 @@ async function desenharBilhetePrincipal(doc, bilhete, cores) {
        width: 150, align: 'right'
      });
   doc.fillColor('rgba(255,255,255,0.35)').font('Helvetica').fontSize(8)
-     .text('www.yuyu-eventos.mz', LARGURA - 24 - 150, ALTURA - 18, {
+     .text('yuyu-eventos.pages.dev', LARGURA - 24 - 150, ALTURA - 18, {
        width: 150, align: 'right'
      });
 }
@@ -379,7 +379,7 @@ async function desenharPaginaBarcode(doc, bilhete, cores) {
   }
 
   doc.fillColor(CINZA).font('Helvetica').fontSize(8)
-     .text('www.yuyu-eventos.mz', 0, ALTURA - 25, {
+     .text('yuyu-eventos.pages.dev', 0, ALTURA - 25, {
        width: LARGURA, align: 'center'
      });
 }
