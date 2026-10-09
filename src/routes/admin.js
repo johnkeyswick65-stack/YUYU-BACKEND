@@ -2,6 +2,8 @@ import express from 'express';
 import { query } from '../db.js';
 import { requireAuth } from '../auth.js';
 import cloudinary from 'cloudinary';
+import { upload } from '../upload.js';
+import { uploadBuffer, apagarImagem } from '../cloudinary.js';
 
 const router = express.Router();
 
@@ -509,6 +511,170 @@ router.delete('/acessos/limpar', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[admin/acessos/limpar]', e);
     res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+
+
+/* ============================================================
+   GET /api/admin/stats-graficos
+   Devolve dados para os graficos do dashboard
+   ============================================================ */
+router.get('/stats-graficos', requireAuth, async (req, res) => {
+  try {
+    // 1. Bilhetes por dia (últimos 7 dias)
+    const { rows: bilhetesDia } = await query(`
+      SELECT
+        TO_CHAR(dia, 'DD/MM') AS dia,
+        COUNT(b.id)::int AS total
+      FROM generate_series(
+        CURRENT_DATE - INTERVAL '6 days',
+        CURRENT_DATE,
+        INTERVAL '1 day'
+      ) AS dia
+      LEFT JOIN bilhetes b ON DATE(b.criado_em) = DATE(dia)
+      GROUP BY dia
+      ORDER BY dia ASC
+    `);
+
+    // 2. Top 5 eventos por bilhetes emitidos
+    const { rows: vendasEvento } = await query(`
+      SELECT
+        e.nome,
+        COUNT(b.id)::int AS bilhetes,
+        COALESCE(SUM(b.preco), 0)::int AS receita
+      FROM eventos e
+      LEFT JOIN bilhetes b ON b.evento_id = e.id AND b.estado <> 'cancelado'
+      GROUP BY e.id, e.nome
+      ORDER BY bilhetes DESC
+      LIMIT 5
+    `);
+
+    // 3. Receita por mes (ultimos 6 meses)
+    const { rows: receitaMes } = await query(`
+      SELECT
+        TO_CHAR(mes, 'MM/YYYY') AS mes,
+        COALESCE(SUM(b.preco), 0)::int AS receita
+      FROM generate_series(
+        DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months',
+        DATE_TRUNC('month', CURRENT_DATE),
+        INTERVAL '1 month'
+      ) AS mes
+      LEFT JOIN bilhetes b
+        ON DATE_TRUNC('month', b.criado_em) = mes
+        AND b.estado <> 'cancelado'
+      GROUP BY mes
+      ORDER BY mes ASC
+    `);
+
+    // 4. Resumo tipo
+    const { rows: tipoResumo } = await query(`
+      SELECT
+        tipo,
+        COUNT(*)::int AS total
+      FROM bilhetes
+      WHERE estado <> 'cancelado'
+      GROUP BY tipo
+    `);
+
+    res.json({
+      ok: true,
+      bilhetes_dia: bilhetesDia,
+      vendas_evento: vendasEvento,
+      receita_mes: receitaMes,
+      tipos: tipoResumo,
+      timestamp: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error('[admin/stats-graficos]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+
+
+/* ============================================================
+   GET /api/admin/config — devolve todas as configuracoes
+   ============================================================ */
+router.get('/config', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await query('SELECT chave, valor FROM configuracoes');
+    const config = {};
+    rows.forEach(r => { config[r.chave] = r.valor; });
+    res.json({ ok: true, config });
+  } catch (e) {
+    console.error('[admin/config]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   PUT /api/admin/config/:chave — atualiza uma configuracao
+   Body: { valor: {...} }
+   ============================================================ */
+router.put('/config/:chave', requireAuth, async (req, res) => {
+  try {
+    const chave = String(req.params.chave || '').trim();
+    const valor = req.body?.valor;
+
+    if (!chave || valor === undefined) {
+      return res.status(400).json({ ok: false, error: 'Dados invalidos' });
+    }
+
+    if (!['hero', 'temas'].includes(chave)) {
+      return res.status(400).json({ ok: false, error: 'Chave nao permitida' });
+    }
+
+    await query(
+      `INSERT INTO configuracoes (chave, valor, atualizado_em)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (chave) DO UPDATE
+       SET valor = EXCLUDED.valor, atualizado_em = NOW()`,
+      [chave, JSON.stringify(valor)]
+    );
+
+    res.json({ ok: true, message: 'Configuracao guardada' });
+  } catch (e) {
+    console.error('[admin/config/put]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   POST /api/admin/hero/imagem — upload da imagem do hero
+   ============================================================ */
+router.post('/hero/imagem', requireAuth, upload.single('imagem'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: 'Ficheiro em falta' });
+    }
+
+    // Buscar config atual
+    const { rows } = await query('SELECT valor FROM configuracoes WHERE chave = $1', ['hero']);
+    const atual = rows[0]?.valor || {};
+
+    // Apagar imagem antiga se existir
+    if (atual.imagem_public_id) {
+      try { await apagarImagem(atual.imagem_public_id); } catch (_) {}
+    }
+
+    // Upload da nova
+    const r = await uploadBuffer(req.file.buffer, 'yuyu-eventos/hero');
+
+    const novo = Object.assign({}, atual, {
+      imagem_url: r.secure_url,
+      imagem_public_id: r.public_id
+    });
+
+    await query(
+      `UPDATE configuracoes SET valor = $1, atualizado_em = NOW() WHERE chave = $2`,
+      [JSON.stringify(novo), 'hero']
+    );
+
+    res.json({ ok: true, imagem_url: r.secure_url });
+  } catch (e) {
+    console.error('[admin/hero/imagem]', e);
+    res.status(500).json({ ok: false, error: 'Erro ao enviar imagem' });
   }
 });
 
