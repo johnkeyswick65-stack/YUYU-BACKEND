@@ -76,6 +76,164 @@ router.get('/admin/todos', requireAuth, async (req, res) => {
 });
 
 /* GET /api/eventos/:slug — detalhe público */
+
+/* ============================================================
+   GET /api/eventos/:slug/social — contadores (likes + comentários)
+   Query opcional: ?navegador=xxx (para saber se já deu like)
+   ============================================================ */
+router.get('/:slug/social', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    const navegador = String(req.query.navegador || '').trim();
+
+    const ev = await query('SELECT id FROM eventos WHERE slug = $1 AND ativo = true', [slug]);
+    if (!ev.rowCount) {
+      return res.status(404).json({ ok: false, error: 'Evento não encontrado' });
+    }
+    const eventoId = ev.rows[0].id;
+
+    const [{ rows: likes }, { rows: comentarios }] = await Promise.all([
+      query('SELECT COUNT(*)::int AS total FROM likes WHERE evento_id = $1', [eventoId]),
+      query(
+        `SELECT COUNT(*)::int AS total FROM comentarios
+         WHERE evento_id = $1 AND estado = 'aprovado'`,
+        [eventoId]
+      )
+    ]);
+
+    let jaGostei = false;
+    if (navegador) {
+      const r = await query(
+        'SELECT 1 FROM likes WHERE evento_id = $1 AND navegador_id = $2',
+        [eventoId, navegador]
+      );
+      jaGostei = r.rowCount > 0;
+    }
+
+    res.json({
+      ok: true,
+      likes: likes[0].total,
+      comentarios: comentarios[0].total,
+      jaGostei
+    });
+  } catch (e) {
+    console.error('[eventos/social]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   POST /api/eventos/:slug/like — alternar gosto
+   Body: { navegador_id }
+   ============================================================ */
+router.post('/:slug/like', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    const navegador = String(req.body?.navegador_id || '').trim();
+
+    if (!navegador) {
+      return res.status(400).json({ ok: false, error: 'navegador_id obrigatório' });
+    }
+
+    const ev = await query('SELECT id FROM eventos WHERE slug = $1 AND ativo = true', [slug]);
+    if (!ev.rowCount) {
+      return res.status(404).json({ ok: false, error: 'Evento não encontrado' });
+    }
+    const eventoId = ev.rows[0].id;
+
+    // Verificar se já gostou
+    const existe = await query(
+      'SELECT id FROM likes WHERE evento_id = $1 AND navegador_id = $2',
+      [eventoId, navegador]
+    );
+
+    let gostei;
+    if (existe.rowCount) {
+      await query('DELETE FROM likes WHERE id = $1', [existe.rows[0].id]);
+      gostei = false;
+    } else {
+      await query(
+        'INSERT INTO likes (evento_id, navegador_id) VALUES ($1, $2)',
+        [eventoId, navegador]
+      );
+      gostei = true;
+    }
+
+    const { rows } = await query(
+      'SELECT COUNT(*)::int AS total FROM likes WHERE evento_id = $1',
+      [eventoId]
+    );
+
+    res.json({ ok: true, gostei, likes: rows[0].total });
+  } catch (e) {
+    console.error('[eventos/like]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   GET /api/eventos/:slug/comentarios — lista comentários aprovados
+   ============================================================ */
+router.get('/:slug/comentarios', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    const ev = await query('SELECT id FROM eventos WHERE slug = $1 AND ativo = true', [slug]);
+    if (!ev.rowCount) {
+      return res.status(404).json({ ok: false, error: 'Evento não encontrado' });
+    }
+
+    const { rows } = await query(
+      `SELECT id, autor_nome, texto, criado_em
+       FROM comentarios
+       WHERE evento_id = $1 AND estado = 'aprovado'
+       ORDER BY criado_em DESC
+       LIMIT 100`,
+      [ev.rows[0].id]
+    );
+
+    res.json({ ok: true, total: rows.length, comentarios: rows });
+  } catch (e) {
+    console.error('[eventos/comentarios/list]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   POST /api/eventos/:slug/comentario — enviar comentário (moderação)
+   Body: { autor_nome, texto, navegador_id? }
+   ============================================================ */
+router.post('/:slug/comentario', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    const autor = String(req.body?.autor_nome || '').trim().slice(0, 60);
+    const texto = String(req.body?.texto || '').trim().slice(0, 500);
+    const navegador = String(req.body?.navegador_id || '').trim() || null;
+
+    if (!autor || !texto) {
+      return res.status(400).json({ ok: false, error: 'Nome e comentário obrigatórios' });
+    }
+
+    const ev = await query('SELECT id FROM eventos WHERE slug = $1 AND ativo = true', [slug]);
+    if (!ev.rowCount) {
+      return res.status(404).json({ ok: false, error: 'Evento não encontrado' });
+    }
+
+    await query(
+      `INSERT INTO comentarios (evento_id, autor_nome, texto, navegador_id, estado)
+       VALUES ($1, $2, $3, $4, 'pendente')`,
+      [ev.rows[0].id, autor, texto, navegador]
+    );
+
+    res.status(201).json({
+      ok: true,
+      message: 'Comentário enviado. Será publicado após aprovação.'
+    });
+  } catch (e) {
+    console.error('[eventos/comentario/post]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
 router.get('/:slug', async (req, res) => {
   try {
     const { rows } = await query(

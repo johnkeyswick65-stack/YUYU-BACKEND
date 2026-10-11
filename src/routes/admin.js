@@ -679,4 +679,102 @@ router.post('/hero/imagem', requireAuth, upload.single('imagem'), async (req, re
 });
 
 
+
+/* ============================================================
+   GET /api/admin/comentarios — lista comentários (moderação)
+   Query: ?estado=pendente|aprovado|rejeitado
+   ============================================================ */
+router.get('/comentarios', requireAuth, async (req, res) => {
+  try {
+    const estado = req.query.estado ? String(req.query.estado).trim() : null;
+
+    const params = [];
+    const where = [];
+    if (estado) {
+      params.push(estado);
+      where.push(`c.estado = $${params.length}`);
+    }
+
+    const whereSQL = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+    const { rows } = await query(
+      `SELECT
+        c.id, c.evento_id, c.autor_nome, c.texto, c.estado, c.criado_em, c.aprovado_em,
+        e.nome AS evento_nome, e.slug AS evento_slug
+       FROM comentarios c
+       JOIN eventos e ON e.id = c.evento_id
+       ${whereSQL}
+       ORDER BY c.criado_em DESC
+       LIMIT 300`,
+      params
+    );
+
+    const { rows: contagens } = await query(`
+      SELECT
+        COUNT(*) FILTER (WHERE estado = 'pendente')::int AS pendentes,
+        COUNT(*) FILTER (WHERE estado = 'aprovado')::int AS aprovados,
+        COUNT(*) FILTER (WHERE estado = 'rejeitado')::int AS rejeitados,
+        COUNT(*)::int AS total
+      FROM comentarios
+    `);
+
+    res.json({ ok: true, total: rows.length, comentarios: rows, contagens: contagens[0] });
+  } catch (e) {
+    console.error('[admin/comentarios]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   PATCH /api/admin/comentarios/:id — mudar estado
+   Body: { estado: 'aprovado' | 'rejeitado' | 'pendente' }
+   ============================================================ */
+router.patch('/comentarios/:id', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const estado = String(req.body?.estado || '').trim();
+
+    if (!['aprovado', 'rejeitado', 'pendente'].includes(estado)) {
+      return res.status(400).json({ ok: false, error: 'Estado inválido' });
+    }
+
+    const { rows } = await query(
+      `UPDATE comentarios
+       SET estado = $1,
+           aprovado_em = CASE WHEN $1 = 'aprovado' THEN NOW() ELSE NULL END,
+           aprovado_por = CASE WHEN $1 = 'aprovado' THEN $2 ELSE NULL END
+       WHERE id = $3
+       RETURNING *`,
+      [estado, req.admin.id, id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: 'Comentário não encontrado' });
+    }
+
+    res.json({ ok: true, comentario: rows[0] });
+  } catch (e) {
+    console.error('[admin/comentarios/patch]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+/* ============================================================
+   DELETE /api/admin/comentarios/:id — apagar definitivamente
+   ============================================================ */
+router.delete('/comentarios/:id', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await query('DELETE FROM comentarios WHERE id = $1', [id]);
+    if (!r.rowCount) {
+      return res.status(404).json({ ok: false, error: 'Comentário não encontrado' });
+    }
+    res.json({ ok: true, message: 'Comentário apagado' });
+  } catch (e) {
+    console.error('[admin/comentarios/delete]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
+
 export default router;
