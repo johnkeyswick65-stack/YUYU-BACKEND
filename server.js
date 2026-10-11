@@ -36,6 +36,19 @@ app.use('/api/bilhetes', bilhetesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/cliente', clienteRoutes);
 
+/* Configuração pública (hero + temas) — sem auth */
+app.get('/api/config-publica', async (req, res) => {
+  try {
+    const { rows } = await dbQuery('SELECT chave, valor FROM configuracoes');
+    const config = {};
+    rows.forEach(r => { config[r.chave] = r.valor; });
+    res.json({ ok: true, config });
+  } catch (e) {
+    console.error('[config-publica]', e);
+    res.status(500).json({ ok: false, error: 'Erro no servidor' });
+  }
+});
+
 app.get('/', (req, res) => {
   res.json({ message: 'YUYU EVENTOS API — vê /api/health' });
 });
