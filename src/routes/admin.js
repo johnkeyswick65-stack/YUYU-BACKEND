@@ -621,7 +621,7 @@ router.put('/config/:chave', requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Dados invalidos' });
     }
 
-    if (!['hero', 'temas'].includes(chave)) {
+    if (!['hero', 'temas', 'tema_ativo'].includes(chave)) {
       return res.status(400).json({ ok: false, error: 'Chave nao permitida' });
     }
 
